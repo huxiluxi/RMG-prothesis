@@ -234,7 +234,7 @@ Pipeline stages:
 5. Decision filtering
 6. Gesture output
 
-Optional robotic hand control hooks are included but currently commented out.
+Optional robotic hand control hooks are included but can be commented out to run without hand.
 
 ---
 

@@ -4,12 +4,12 @@ import logging
 import numpy as np
 
 from core.config import HAND_TYPE, HAND_JOINT, CAN_INTERFACE
-from LinkerHand.linker_hand_api import LinkerHandApi
+from control.linkerhand_python_sdk.LinkerHand.linker_hand_api import LinkerHandApi
 
 logger = logging.getLogger(__name__)
 
 class HandMotionPlanner:
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=True):
         self.verbose = verbose
         
         if self.verbose:
@@ -17,8 +17,8 @@ class HandMotionPlanner:
         #Constants
         self.GRASP_POSES = [
             "PalmarPinch",      #Thumb-index pinch
-            "2FingerPinch",   #Thumb-2 finger
-            "LateralPinch",    #Key grip
+            "2FingerPinch",     #Thumb-2 finger
+            "LateralPinch",     #Key grip
             
             #Power
             "Wrap",             #Dynamic wrap
@@ -28,7 +28,7 @@ class HandMotionPlanner:
             #Precision
             "PalmarPinch": [70, 0, 140, 0, 0, 0, 210],
             "2FingerPinch": [80, 0, 140, 130, 0, 0, 190],
-            "LateralPinch": [0, 255, 20, 0, 0, 0, 120],
+            "LateralPinch": [0, 255, 30, 0, 0, 0, 255],
             
             #Power
             "Wrap": [10, 0, 0, 0, 0, 0, 170],
@@ -76,18 +76,30 @@ class HandMotionPlanner:
             logger.info(f"HandMotionPlanner ready, current pose: {self.current_pose}")
 
     # -----------------------------
+    # Action selection
+    # -----------------------------
+    def action(self,command):
+        if command in self.GRASP_POSES:
+            self.execute_grasp(command)
+        else:
+            self.move(command)
+
+    # -----------------------------
     # BASIC MOTION
     # -----------------------------
     def move(self, to_gesture):
-        if self.verbose:
-            logger.info(f"Moving from {self.current_pose} to {to_gesture}")
-        
         if self.current_pose ==  to_gesture:
             if self.verbose:
-                logger.info("No move needed - already at target pose")
+                logger.info("No move - already at target pose")
             return
-        
-        if self.current_pose in self.GRASP_POSES and to_gesture == "Open":
+    
+        if self.current_pose in self.GRASP_POSES and to_gesture != "Open":
+            if self.verbose:
+                logger.info("Must open before new grasp")
+            return
+        else:
+            if self.verbose:
+                logger.info("Releasing grasp")
             self.release()
         
         target_pose = self.POSES[to_gesture]
@@ -213,6 +225,10 @@ class HandMotionPlanner:
     # GRASP EXECUTION
     # -----------------------------
     def execute_grasp(self, gesture):
+        if self.current_pose in self.GRASP_POSES and gesture in self.GRASP_POSES:
+            if self.verbose:
+                logger.info("Must open before new grasp")
+            return
         print(f"\nExecuting grasp: {gesture}")
 
         target = self.POSES[gesture]
@@ -276,7 +292,7 @@ class HandMotionPlanner:
         target = np.array(target)
         current = np.array(self.hand.get_state())
         stall_count = 0
-        # contact_seen = False
+        contact_seen = False
         
         if self.verbose:
             logger.info(f"Closing until contact - target: {target}, step: {step}")
@@ -321,10 +337,38 @@ class HandMotionPlanner:
 
             current = new_state
 
-    def _hold_force(self, duration=2.0):
+    def _hold_force(self, duration=0.1):
         self.hand.set_torque([120]*7)
         time.sleep(duration)
 
     def release(self):
         print("→ Release")
         self.hand.set_torque([255]*7)
+
+if __name__ == "__main__":
+    hand = LinkerHandApi(
+        hand_joint=HAND_JOINT,
+        hand_type=HAND_TYPE,
+        can=CAN_INTERFACE
+    )
+
+    planner = HandMotionPlanner(hand)
+    print("Hand ready")
+
+    while True:
+        #Get command - check if valid
+        while True:
+            cmd = input(f"Enter pose {planner.KEYS} or 'exit': ").strip()
+            if cmd in planner.POSES or cmd == "exit":
+                print()
+                break
+
+        if cmd == "exit":
+            print("Exiting program")
+            break
+
+        elif cmd in planner.GRASP_POSES:
+            planner.execute_grasp(cmd)
+
+        elif cmd in planner.POSES:
+            planner.move(cmd)

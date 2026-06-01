@@ -1,4 +1,7 @@
-from core.config import COM_PORT,START_FREQ, STOP_FREQ, POINTS, BULK_READ, CAL_FILE, HAND_JOINT, HAND_TYPE, CAN_INTERFACE
+import logging
+import time
+
+from core.config import COM_PORT,START_FREQ, STOP_FREQ, POINTS, BULK_READ, CAL_FILE, HAND_JOINT, HAND_TYPE, CAN_INTERFACE, _BASE_DIR
 from core.logger import setup_logging
 
 from acquisition.litevna import LiteVNA
@@ -8,15 +11,11 @@ from perception.features import MagnitudeFeatureExtractor
 from perception.classifier import Classifier
 from perception.trainer import Trainer
 from decision.commitment import CommitmentFilter
-from core.config import _BASE_DIR
 
 # control
-# from control.linker_hand import HandMotionPlanner
-# from LinkerHand.linker_hand_api import LinkerHandApi
+from control.linker_hand import HandMotionPlanner
+from control.linkerhand_python_sdk.LinkerHand.linker_hand_api import LinkerHandApi
 
-import logging
-import numpy as np
-import time
 
 # ============================================================
 # LOGGING
@@ -38,7 +37,7 @@ vna = LiteVNA(
     stop_freq=STOP_FREQ,
     points=POINTS,
     read_size=BULK_READ,
-    verbose=True
+    verbose=False
 )
 
 logger.info("Loading calibration")
@@ -55,17 +54,16 @@ converter = SParameterConverter()
 logger.info("Initializing ML pipeline")
 extractor = MagnitudeFeatureExtractor(verbose=True)
 model = Classifier(verbose=True,n_PC=30)
-commit = CommitmentFilter()
+commit = CommitmentFilter(verbose=False,window=8)
 
 trainer = Trainer(vna, converter, cal, extractor, verbose=True)
 
-#Linkerbot hand required for this
-# hand = LinkerHandApi(
-#     hand_joint=HAND_JOINT,
-#     hand_type=HAND_TYPE,
-#     can=CAN_INTERFACE
-# )
-# planner = HandMotionPlanner(hand)
+hand = LinkerHandApi(
+    hand_joint=HAND_JOINT,
+    hand_type=HAND_TYPE,
+    can=CAN_INTERFACE
+)
+planner = HandMotionPlanner(hand)
 
 # ============================================================
 # MAIN LOOP - INFERENCE MODE
@@ -108,14 +106,22 @@ def run_inference(gestures):
         stable = commit.update(pred)
         t_commit = (time.perf_counter() - t0) * 1000
 
-        logger.info(f"Prediction: {gestures[pred]} | Stable: {gestures[stable]}")
+        stable_text = gestures[stable]
+        prediction_text = gestures[pred]
+
+        stable_color = "\033[31m" if stable_text == "No action" else "\033[32m"
+
+        logger.info(
+            f"Prediction: \033[33m{prediction_text}\033[0m | "
+            f"Stable: {stable_color}\033[1m{stable_text}\033[0m"
+        )
         
-        #Linkerbot hand required for this
-        # planner.move(stable)
+        if(gestures[stable] != "No action"):
+            planner.action(gestures[stable])
 
         loop_ms = (time.perf_counter() - loop_t0) * 1000
 
-        logger.info(f"TIMING | Acquire: {t_acquire:7.2f} ms | Convert: {t_convert:7.2f} ms | Calib: {t_calib:7.2f} ms | Extract: {t_extract:7.2f} ms | Predict: {t_predict:7.2f} ms | Commit: {t_commit:7.2f} ms | Total: {loop_ms:7.2f} ms")
+        # logger.info(f"TIMING | Acquire: {t_acquire:7.2f} ms | Convert: {t_convert:7.2f} ms | Calib: {t_calib:7.2f} ms | Extract: {t_extract:7.2f} ms | Predict: {t_predict:7.2f} ms | Commit: {t_commit:7.2f} ms | Total: {loop_ms:7.2f} ms")
 
 # ============================================================
 # TRAINING MODE
@@ -158,14 +164,16 @@ if __name__ == "__main__":
     
     # Example: Uncomment to run training
     gestures = ["PalmarPinch", "2FingerPinch", "LateralPinch", "Wrap", "Open", "Relaxed"]
+    # gestures = ["PalmarPinch", "Open"]
+    
     run_training(
         gestures=gestures,
-        iterations=10,
+        iterations=60,
         pause_time=5,
         output_filename=_BASE_DIR / "output" / "training_data.csv"
     )
-
-    # model.fit_from_file("analysis_data.csv")
+    gestures.append("No action")
+    # model.fit_from_file(_BASE_DIR / "output" / "training_data.csv")
     
     # Run inference by default
     try:
